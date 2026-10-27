@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Guardrail — AI trading agent on HSK Chain</title>
+<style>
+  :root { --bg:#0b0f17; --card:#121826; --line:#1f2937; --text:#e5e7eb; --muted:#9ca3af; --green:#22c55e; --red:#ef4444; --accent:#8b5cf6; --amber:#f59e0b; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background:var(--bg); color:var(--text); }
+  header { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:16px 24px; border-bottom:1px solid var(--line); flex-wrap:wrap; }
+  h1 { font-size:18px; margin:0; letter-spacing:.2px; }
+  h1 span { color:var(--accent); }
+  .pill { font-size:12px; padding:4px 10px; border-radius:999px; border:1px solid var(--line); color:var(--muted); }
+  .pill.on { color:var(--green); border-color:#14532d; } .pill.off { color:var(--red); border-color:#7f1d1d; }
+  main { display:grid; grid-template-columns: 1.6fr 1fr; gap:16px; padding:16px 24px; max-width:1300px; margin:0 auto; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:16px; }
+  .stats { display:grid; grid-template-columns: repeat(4, 1fr); gap:12px; }
+  @media (max-width: 600px) { .stats { grid-template-columns: repeat(2, 1fr); } }
+  .stat .k { font-size:12px; color:var(--muted); } .stat .v { font-size:22px; font-weight:600; margin-top:4px; }
+  .pos { color:var(--green); } .neg { color:var(--red); }
+  .section-title { font-size:13px; color:var(--muted); margin:0 0 10px; text-transform:uppercase; letter-spacing:.6px; }
+  svg { width:100%; height:180px; display:block; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th, td { text-align:left; padding:8px 6px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--muted); font-weight:500; }
+  .tag { font-size:11px; padding:2px 8px; border-radius:6px; }
+  .tag.filled { background:#14532d; color:#bbf7d0; } .tag.blocked { background:#7f1d1d; color:#fecaca; } .tag.paper { background:#312e81; color:#c7d2fe; }
+  .limits { display:grid; grid-template-columns: 1fr 1fr; gap:6px 16px; font-size:13px; }
+  .limits div span { color:var(--muted); }
+  .chat { display:flex; flex-direction:column; height: 560px; }
+  .msgs { flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:8px; padding-right:4px; }
+  .msg { padding:10px 12px; border-radius:12px; font-size:14px; line-height:1.4; white-space:pre-wrap; max-width:92%; }
+  .msg.user { align-self:flex-end; background:var(--accent); color:white; }
+  .msg.bot { align-self:flex-start; background:#1b2232; border:1px solid var(--line); }
+  form { display:flex; gap:8px; margin-top:12px; }
+  input { flex:1; background:#0f1420; color:var(--text); border:1px solid var(--line); border-radius:10px; padding:12px; font-size:14px; }
+  button { background:var(--accent); color:white; border:0; border-radius:10px; padding:0 16px; font-size:14px; cursor:pointer; }
+  button.danger { background:var(--red); }
+  .chips { display:flex; flex-wrap:wrap; gap:6px; margin-top:10px; }
+  .chip { font-size:12px; background:#0f1420; border:1px solid var(--line); color:var(--muted); padding:6px 10px; border-radius:999px; cursor:pointer; }
+  .decision { font-size:13px; color:var(--muted); margin-top:10px; }
+  .decision b { color:var(--text); }
+  a { color:var(--accent); }
+  .stack { display:flex; flex-direction:column; gap:16px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Guardrail <span>· AI agent trading on HSKSwap, limits enforced on-chain</span></h1>
+  <div style="display:flex; gap:8px; align-items:center;">
+    <span id="mode" class="pill">—</span>
+    <span id="state" class="pill">—</span>
+    <button class="danger" onclick="send('emergency stop')">Emergency stop</button>
+  </div>
+</header>
+
+<main>
+  <div class="stack">
+    <div class="card stats">
+      <div class="stat"><div class="k">Vault value (NAV)</div><div class="v" id="nav">—</div></div>
+      <div class="stat"><div class="k">P&amp;L</div><div class="v" id="pnl">—</div></div>
+      <div class="stat"><div class="k">HSK price</div><div class="v" id="price">—</div></div>
+      <div class="stat"><div class="k">Holdings</div><div class="v" id="hold" style="font-size:15px">—</div></div>
+    </div>
+
+    <div class="card">
+      <p class="section-title">HSK / USDT · live from HSKSwap pool</p>
+      <svg id="chart" viewBox="0 0 600 180" preserveAspectRatio="none"></svg>
+      <div class="decision" id="decision">Waiting for first tick…</div>
+    </div>
+
+    <div class="card">
+      <p class="section-title">Agent decisions &amp; trades</p>
+      <table>
+        <thead><tr><th>Time</th><th>Status</th><th>Action</th><th>Price</th><th>Why</th></tr></thead>
+        <tbody id="trades"><tr><td colspan="5" style="color:var(--muted)">No trades yet.</td></tr></tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <p class="section-title">Strategy settings (change them in chat)</p>
+      <div class="limits" id="settings"></div>
+      <p class="section-title" style="margin-top:16px">On-chain vault</p>
+      <div class="limits" id="onchain"></div>
+    </div>
+  </div>
+
+  <div class="card chat">
+    <p class="section-title">Talk to your agent</p>
+    <div class="msgs" id="msgs">
+      <div class="msg bot">Hi. I trade HSK/USDT on HSKSwap inside the limits your vault enforces. Ask me "status", or tell me "risk 2%", "be more conservative", "stop".</div>
+    </div>
+    <div class="chips">
+      <span class="chip" onclick="send('status')">status</span>
+      <span class="chip" onclick="send('show trades')">show trades</span>
+      <span class="chip" onclick="send('be more conservative')">be more conservative</span>
+      <span class="chip" onclick="send('stop loss 1.5%')">stop loss 1.5%</span>
+      <span class="chip" onclick="send('stop')">pause</span>
+      <span class="chip" onclick="send('resume')">resume</span>
+    </div>
+    <form onsubmit="event.preventDefault(); const i=document.getElementById('q'); if(i.value.trim()) send(i.value); i.value='';">
+      <input id="q" placeholder="e.g. cut risk to 2% and take profit at 4%" autocomplete="off" />
+      <button>Send</button>
+    </form>
+  </div>
+</main>
+
+<script>
+const API = location.origin.startsWith("http") ? location.origin : "http://localhost:8787";
+const $ = (id) => document.getElementById(id);
+const num = (n) => Math.abs(n) >= 1 || n === 0 ? n.toFixed(2) : n.toPrecision(2);
+const usd = (n) => (n < 0 ? "-$" : "$") + num(Math.abs(n));
+const esc = (s) => String(s).replace(/[&<>"]/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c]));
+
+function drawChart(prices, entry) {
+  const svg = $("chart");
+  if (!prices || prices.length < 2) { svg.innerHTML = ""; return; }
+  const lo = Math.min(...prices, entry ?? Infinity), hi = Math.max(...prices, entry ?? -Infinity);
+  const pad = (hi - lo) * 0.1 || hi * 0.001;
+  const y = (p) => 170 - ((p - (lo - pad)) / ((hi + pad) - (lo - pad))) * 160;
+  const x = (i) => (i / (prices.length - 1)) * 600;
+  const pts = prices.map((p, i) => `${x(i).toFixed(1)},${y(p).toFixed(1)}`).join(" ");
+  const up = prices.at(-1) >= prices[0];
+  let h = `<polyline fill="none" stroke="${up ? "#22c55e" : "#ef4444"}" stroke-width="2" points="${pts}"/>`;
+  if (entry) h += `<line x1="0" x2="600" y1="${y(entry)}" y2="${y(entry)}" stroke="#f59e0b" stroke-dasharray="6 4"/><text x="6" y="${y(entry) - 4}" fill="#f59e0b" font-size="11">entry ${entry.toFixed(5)}</text>`;
+  svg.innerHTML = h;
+}
+
+async function refresh() {
+  try {
+    const s = await (await fetch(API + "/status")).json();
+    const EXP = s.chainId === 133 ? "https://testnet-explorer.hsk.xyz" : "https://hsk.blockscout.com";
+    $("mode").textContent = s.mode === "live" ? (s.chainId === 133 ? "LIVE · HSK testnet" : "LIVE · HSK mainnet") : "PAPER · simulated";
+    const paused = s.onchain?.paused;
+    $("state").textContent = paused ? "VAULT PAUSED" : (s.settings.trading ? "TRADING ON" : "TRADING OFF");
+    $("state").className = "pill " + (!paused && s.settings.trading ? "on" : "off");
+    $("nav").textContent = usd(s.nav);
+    $("pnl").textContent = `${s.pnl >= 0 ? "+" : ""}${usd(s.pnl)} (${s.pnlPct.toFixed(2)}%)`;
+    $("pnl").className = "v " + (s.pnl >= 0 ? "pos" : "neg");
+    $("price").textContent = "$" + s.price.toFixed(5);
+    $("hold").textContent = `${num(s.usdt)} USDT · ${num(s.hsk)} HSK`;
+    drawChart(s.prices, s.position?.entryPrice);
+    if (s.lastSignal) $("decision").innerHTML = `Last decision: <b>${esc(s.lastSignal.action.toUpperCase())}</b> · ${esc(s.lastSignal.reason)}`;
+    $("trades").innerHTML = s.trades.length ? s.trades.map(t => `<tr>
+      <td>${new Date(t.time).toLocaleTimeString()}</td>
+      <td><span class="tag ${t.status}">${t.status}</span></td>
+      <td>${esc(t.action)} ${esc(t.amountIn)}</td>
+      <td>$${t.price.toFixed(5)}</td>
+      <td>${esc(t.reason)}${t.note ? `<br><span style="color:#fca5a5">${esc(t.note)}</span>` : ""}${t.tx ? `<br><a target="_blank" href="${EXP}/tx/${t.tx}">view tx</a>` : ""}</td></tr>`).join("")
+      : `<tr><td colspan="5" style="color:var(--muted)">No trades yet.</td></tr>`;
+    const st = s.settings;
+    $("settings").innerHTML = [
+      ["Risk per trade", st.riskPct + "%"], ["Stop-loss", st.stopLossPct + "%"], ["Take-profit", st.takeProfitPct + "%"],
+      ["Max HSK exposure", st.maxHskExposurePct + "%"], ["Signal edge", st.minEdgePct + "%"], ["Slippage", (st.slippageBps / 100) + "%"],
+      ["EMA fast / slow", st.fastEma + " / " + st.slowEma], ["Tick every", st.pollSecs + "s"],
+    ].map(([k, v]) => `<div><span>${k}</span> ${v}</div>`).join("");
+    $("onchain").innerHTML = s.vault
+      ? [["Vault", `<a target="_blank" href="${EXP}/address/${s.vault}">${s.vault.slice(0, 8)}…${s.vault.slice(-6)}</a>`],
+         ["Paused", paused ? "yes" : "no"], ["Volume today", usd(s.onchain?.volToday ?? 0)], ["Trades today", s.onchain?.tradesToday ?? 0]]
+          .map(([k, v]) => `<div><span>${k}</span> ${v}</div>`).join("")
+      : `<div><span>Paper mode</span> no vault connected</div>`;
+  } catch (e) { $("decision").textContent = "Can't reach the agent at " + API; }
+}
+
+async function send(text) {
+  const m = $("msgs");
+  m.insertAdjacentHTML("beforeend", `<div class="msg user">${esc(text)}</div>`);
+  m.scrollTop = m.scrollHeight;
+  try {
+    const r = await (await fetch(API + "/chat", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text }) })).json();
+    m.insertAdjacentHTML("beforeend", `<div class="msg bot">${esc(r.reply ?? r.error)}</div>`);
+  } catch { m.insertAdjacentHTML("beforeend", `<div class="msg bot">Agent unreachable.</div>`); }
+  m.scrollTop = m.scrollHeight;
+  refresh();
+}
+
+refresh();
+setInterval(refresh, 5000);
+</script>
+</body>
+</html>
